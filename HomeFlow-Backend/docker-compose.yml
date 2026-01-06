@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: homeflow-postgres
+    environment:
+      POSTGRES_DB: homeflow_dev
+      POSTGRES_USER: homeflow_user
+      POSTGRES_PASSWORD: homeflow_pass
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homeflow_user -d homeflow_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - homeflow-network
+
+  postgres-test:
+    image: postgres:15
+    container_name: homeflow-postgres-test
+    environment:
+      POSTGRES_DB: homeflow_test
+      POSTGRES_USER: homeflow_user
+      POSTGRES_PASSWORD: homeflow_pass
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homeflow_user -d homeflow_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - homeflow-network
+
+volumes:
+  postgres_data:
+    driver: local
+  postgres_test_data:
+    driver: local
+
+networks:
+  homeflow-network:
+    driver: bridge
