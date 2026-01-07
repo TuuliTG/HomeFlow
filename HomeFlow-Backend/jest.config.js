@@ -12,5 +12,25 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
-  testTimeout: 10000
+  testTimeout: 15000, // Increased timeout for database operations
+  // Separate test patterns for different test types
+  projects: [
+    {
+      displayName: 'unit',
+      testMatch: ['<rootDir>/tests/**/*.test.js'],
+      testPathIgnorePatterns: ['<rootDir>/tests/integration/']
+    },
+    {
+      displayName: 'integration',
+      testMatch: ['<rootDir>/tests/integration/**/*.test.js'],
+      setupFilesAfterEnv: ['<rootDir>/tests/setup.js']
+    }
+  ],
+  // Global setup for all tests
+  globalSetup: undefined,
+  globalTeardown: undefined,
+  // Test environment variables
+  testEnvironmentOptions: {
+    NODE_ENV: 'test'
+  }
 };

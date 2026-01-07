@@ -143,6 +143,7 @@ class ValidationService {
   validateFilters(filters) {
     const errors = [];
 
+    // Validate status filter
     if (filters.status && !TaskUtils.isValidStatus(filters.status)) {
       errors.push({
         field: 'status',
@@ -152,6 +153,7 @@ class ValidationService {
       });
     }
 
+    // Validate category filter
     if (filters.category && !TaskUtils.isValidCategory(filters.category)) {
       errors.push({
         field: 'category',
@@ -161,6 +163,7 @@ class ValidationService {
       });
     }
 
+    // Validate assignedTo filter
     if (filters.assignedTo && (typeof filters.assignedTo !== 'string' || filters.assignedTo.trim().length === 0)) {
       errors.push({
         field: 'assignedTo',
@@ -170,6 +173,7 @@ class ValidationService {
       });
     }
 
+    // Validate points filter
     if (filters.points !== undefined) {
       if (!TaskUtils.isValidPoints(filters.points)) {
         errors.push({
@@ -181,6 +185,7 @@ class ValidationService {
       }
     }
 
+    // Validate dueDate filter
     if (filters.dueDate) {
       const dueDate = new Date(filters.dueDate);
       if (isNaN(dueDate.getTime())) {
@@ -191,6 +196,21 @@ class ValidationService {
           constraint: 'valid_date_filter'
         });
       }
+    }
+
+    // Validate filter combinations for business logic
+    if (filters.status === TaskStatus.AVAILABLE && filters.assignedTo) {
+      errors.push({
+        field: 'assignedTo',
+        message: 'Available tasks cannot be filtered by assignedTo (available tasks have no assigned user)',
+        value: filters.assignedTo,
+        constraint: 'invalid_filter_combination'
+      });
+    }
+
+    if (filters.status === TaskStatus.ALLOCATED && !filters.assignedTo) {
+      // This is not an error, just a note that allocated tasks should typically have assignedTo
+      // We don't enforce this as a validation error since it's a query, not data creation
     }
 
     return { isValid: errors.length === 0, errors };

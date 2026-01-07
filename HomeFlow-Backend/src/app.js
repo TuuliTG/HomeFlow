@@ -5,64 +5,97 @@ require('dotenv').config();
 
 const logger = require('./utils/logger');
 const { connectDatabase } = require('./config/database');
+const { 
+  globalErrorHandler, 
+  notFoundHandler, 
+  requestIdMiddleware 
+} = require('./middleware/errorHandler');
+const { requestLogger, errorRequestLogger } = require('./middleware/requestLogger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Request ID middleware - must be first to ensure all requests have IDs
+app.use(requestIdMiddleware);
 
 // Security middleware
 app.use(helmet());
 app.use(cors());
 
-// Body parsing middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body parsing middleware with enhanced error handling
+app.use(express.json({ 
+  limit: '10mb',
+  type: 'application/json'
+}));
+app.use(express.urlencoded({ 
+  extended: true,
+  limit: '10mb'
+}));
 
-// Request logging middleware
-app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.path}`, {
-    ip: req.ip,
-    userAgent: req.get('User-Agent')
-  });
-  next();
-});
+// Enhanced request logging middleware
+app.use(requestLogger);
 
-// Health check endpoint
+// Health check endpoint with enhanced error handling
 app.get('/api/health', async (req, res) => {
   try {
-    // Check database connectivity
-    const { getPool } = require('./config/database');
-    const pool = getPool();
-    await pool.query('SELECT 1');
+    // Use the dedicated health check function
+    const { checkDatabaseHealth } = require('./config/database');
+    const dbHealth = await checkDatabaseHealth();
     
-    res.json({
-      success: true,
-      message: 'Server is running',
-      database: 'connected',
-      timestamp: new Date().toISOString()
-    });
+    if (dbHealth.status === 'connected') {
+      logger.info('Health check successful', {
+        requestId: req.requestId,
+        database: dbHealth.status
+      });
+      
+      res.json({
+        success: true,
+        message: 'Server is running',
+        database: dbHealth.status,
+        requestId: req.requestId,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      logger.warn('Health check - database disconnected', {
+        requestId: req.requestId,
+        database: dbHealth.status,
+        error: dbHealth.error
+      });
+      
+      res.status(503).json({
+        success: false,
+        error: 'SERVICE_UNAVAILABLE',
+        database: dbHealth.status,
+        message: dbHealth.error,
+        requestId: req.requestId,
+        timestamp: new Date().toISOString()
+      });
+    }
   } catch (error) {
-    logger.error('Health check failed:', error);
+    logger.error('Health check failed', {
+      requestId: req.requestId,
+      error: error.message,
+      database: 'error'
+    });
+    
     res.status(500).json({
       success: false,
-      error: 'Health check failed',
-      database: 'disconnected',
+      error: 'HEALTH_CHECK_FAILED',
+      database: 'error',
       message: error.message,
+      requestId: req.requestId,
       timestamp: new Date().toISOString()
     });
   }
 });
 
-// Detailed status endpoint
+// Detailed status endpoint with enhanced logging
 app.get('/api/status', async (req, res) => {
   try {
-    const { getPool } = require('./config/database');
-    const pool = getPool();
+    const { checkDatabaseHealth } = require('./config/database');
+    const dbHealth = await checkDatabaseHealth();
     
-    // Check database connectivity and get connection info
-    const dbResult = await pool.query('SELECT version(), now() as current_time');
-    const dbInfo = dbResult.rows[0];
-    
-    res.json({
+    const statusData = {
       success: true,
       server: {
         status: 'running',
@@ -71,21 +104,30 @@ app.get('/api/status', async (req, res) => {
         uptime: process.uptime(),
         memory: process.memoryUsage()
       },
-      database: {
-        status: 'connected',
-        version: dbInfo.version,
-        currentTime: dbInfo.current_time,
-        totalConnections: pool.totalCount,
-        idleConnections: pool.idleCount,
-        waitingConnections: pool.waitingCount
-      },
+      database: dbHealth,
+      requestId: req.requestId,
       timestamp: new Date().toISOString()
+    };
+    
+    logger.info('Status check successful', {
+      requestId: req.requestId,
+      serverStatus: statusData.server.status,
+      databaseStatus: statusData.database.status
     });
+    
+    // Return 503 if database is not connected
+    const statusCode = dbHealth.status === 'connected' ? 200 : 503;
+    res.status(statusCode).json(statusData);
   } catch (error) {
-    logger.error('Status check failed:', error);
+    logger.error('Status check failed', {
+      requestId: req.requestId,
+      error: error.message,
+      stack: error.stack
+    });
+    
     res.status(500).json({
       success: false,
-      error: 'Status check failed',
+      error: 'STATUS_CHECK_FAILED',
       server: {
         status: 'running',
         environment: process.env.NODE_ENV || 'development',
@@ -93,9 +135,10 @@ app.get('/api/status', async (req, res) => {
         uptime: process.uptime()
       },
       database: {
-        status: 'disconnected',
+        status: 'error',
         error: error.message
       },
+      requestId: req.requestId,
       timestamp: new Date().toISOString()
     });
   }
@@ -105,53 +148,72 @@ app.get('/api/status', async (req, res) => {
 const taskRoutes = require('./routes/taskRoutes');
 app.use('/api/tasks', taskRoutes);
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Route not found',
-    message: `Cannot ${req.method} ${req.originalUrl}`,
-    timestamp: new Date().toISOString()
-  });
-});
+// Error request logging middleware - logs failed requests
+app.use(errorRequestLogger);
 
-// Global error handler
-app.use((error, req, res, _next) => {
-  logger.error('Unhandled error:', error);
-  
-  res.status(error.status || 500).json({
-    success: false,
-    error: error.name || 'Internal Server Error',
-    message: error.message || 'An unexpected error occurred',
-    timestamp: new Date().toISOString()
-  });
-});
+// Enhanced 404 handler
+app.use('*', notFoundHandler);
 
-// Start server
+// Enhanced global error handler
+app.use(globalErrorHandler);
+
+// Start server with enhanced error handling
 async function startServer() {
   try {
-    // Initialize database connection
+    // Initialize database connection with retry logic
     await connectDatabase();
+    logger.info('Database connection established successfully');
+    
+    // Validate database connectivity on startup
+    const { validateDatabaseConnection } = require('./config/database');
+    await validateDatabaseConnection();
+    logger.info('Database startup validation completed successfully');
     
     app.listen(PORT, () => {
-      logger.info(`Server running on port ${PORT}`);
-      logger.info(`Environment: ${process.env.NODE_ENV}`);
+      logger.info('Server started successfully', {
+        port: PORT,
+        environment: process.env.NODE_ENV || 'development',
+        nodeVersion: process.version,
+        timestamp: new Date().toISOString()
+      });
     });
   } catch (error) {
-    logger.error('Failed to start server:', error);
+    logger.error('Failed to start server', {
+      error: error.message,
+      stack: error.stack,
+      port: PORT
+    });
     process.exit(1);
   }
 }
 
-// Handle graceful shutdown
+// Handle graceful shutdown with enhanced logging
 process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down gracefully');
+  logger.info('SIGTERM received, initiating graceful shutdown');
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
-  logger.info('SIGINT received, shutting down gracefully');
+  logger.info('SIGINT received, initiating graceful shutdown');
   process.exit(0);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception occurred', {
+    error: error.message,
+    stack: error.stack
+  });
+  process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled promise rejection', {
+    reason: reason,
+    promise: promise
+  });
+  process.exit(1);
 });
 
 if (require.main === module) {
